@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>p-value Region Visualizer</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jstat@latest/dist/jstat.min.js"></script>
+    <style>
+        body{font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;margin:0;padding:20px;background:#f5f7fa;color:#2c3e50}
+        .container{max-width:1000px;margin:auto;background:#fff;border-radius:12px;box-shadow:0 8px 25px rgba(0,0,0,.1);overflow:hidden}
+        header{background:#3498db;color:#fff;padding:20px;text-align:center}
+        header h1{margin:0;font-size:1.8em}
+        .controls{padding:20px;display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;background:#ecf0f1}
+        .control-group{display:flex;flex-direction:column}
+        label{font-weight:600;margin-bottom:5px;font-size:.95em}
+        input[type=range]{accent-color:#3498db}
+        .value-display{font-family:monospace;font-size:.9em;color:#2c3e50;margin-top:4px}
+        .alternative{grid-column:1/-1;display:flex;justify-content:center;gap:25px;margin:10px 0;font-size:1em}
+        .chart-container{padding:20px;position:relative;height:420px}
+        .stats{padding:15px 20px;background:#f8f9fa;border-top:1px solid #ddd;font-family:'Courier New',monospace;font-size:.95em;line-height:1.6}
+        .phat{font-weight:bold;position:relative;display:inline-block}
+        .phat-hat{position:absolute;top:-0.3em;left:0.05em;font-size:0.6em;transform:translateY(-50%)}
+        footer{text-align:center;padding:15px;font-size:.85em;background:#2c3e50;color:#bdc3c7}
+        @media(max-width:600px){.controls{grid-template-columns:1fr}.alternative{flex-direction:column;align-items:center}}
+    </style>
+</head>
+<body>
+<div class="container">
+    <header>
+        <h1>p-value Region Visualizer</h1>
+        <p style="margin:5px 0 0;font-size:.95em;opacity:.9">
+            Orange = p-value region • Blue = standard normal curve
+        </p>
+    </header>
+    <div class="alternative">
+        <label><input type="radio" name="alternative" value="two-sided" checked> Two-sided</label>
+        <label><input type="radio" name="alternative" value="greater"> Right-tailed</label>
+        <label><input type="radio" name="alternative" value="less"> Left-tailed</label>
+    </div>
+    <div class="controls">
+        <div class="control-group">
+            <label for="p0">Null Proportion (p₀)</label>
+            <input type="range" id="p0" min="0.01" max="0.99" step="0.01" value="0.5">
+            <div class="value-display">p₀ = <span id="p0-value">0.50</span></div>
+        </div>
+        <div class="control-group">
+            <label for="n">Sample Size (n)</label>
+            <input type="range" id="n" min="10" max="500" step="5" value="100">
+            <div class="value-display">n = <span id="n-value">100</span></div>
+        </div>
+        <div class="control-group">
+            <label for="x">Number of Successes (x)</label>
+            <input type="range" id="x" min="0" max="100" step="1" value="60">
+            <div class="value-display">x = <span id="x-value">60</span> → <span class="phat">p<span class="phat-hat">^</span></span> = <span id="phat-value">0.600</span></div>
+        </div>
+    </div>
+    <div class="chart-container"><canvas id="normalChart"></canvas></div>
+    <div class="stats" id="stats-output"></div>
+</div>
+<footer>
+    Normal approximation valid when np₀ ≥ 5 and n(1−p₀) ≥ 5
+</footer>
+<script>
+    const ctx = document.getElementById('normalChart').getContext('2d');
+    const p0Slider = document.getElementById('p0');
+    const nSlider = document.getElementById('n');
+    const xSlider = document.getElementById('x');
+    const altRadios = document.querySelectorAll('input[name="alternative"]');
+    const p0Value = document.getElementById('p0-value');
+    const nValue = document.getElementById('n-value');
+    const xValue = document.getElementById('x-value');
+    const phatValue = document.getElementById('phat-value');
+    const statsOutput = document.getElementById('stats-output');
+    let chart;
+
+    const normalPDF = x => Math.exp(-0.5*x*x)/Math.sqrt(2*Math.PI);
+    const normCDF = z => jStat.normal.cdf(z,0,1);
+
+    function updateChart() {
+        const p0 = parseFloat(p0Slider.value);
+        const n = parseInt(nSlider.value);
+        const x = parseInt(xSlider.value);
+        const alt = document.querySelector('input[name="alternative"]:checked').value;
+
+        const phat = x / n;
+        const se = Math.sqrt(p0 * (1 - p0) / n);
+        const z = (phat - p0) / se;
+
+        // p-value
+        let pValue;
+        if (alt === 'two-sided') pValue = 2 * (1 - normCDF(Math.abs(z)));
+        else if (alt === 'greater') pValue = 1 - normCDF(z);
+        else pValue = normCDF(z);
+
+        // x-axis
+        const step = 0.02, xVals = [];
+        for (let i = -4; i <= 4; i += step) xVals.push(i);
+        const pdf = xVals.map(normalPDF);
+
+        // p-value condition
+        const pCond = alt === 'two-sided' ? v => Math.abs(v) >= Math.abs(z)
+                    : alt === 'greater' ? v => v >= z
+                    : v => v <= z;
+
+        const datasets = [];
+
+        // 1. p-value region (orange)
+        datasets.push({
+            data: xVals.map((v, i) => pCond(v) ? pdf[i] : null),
+            backgroundColor: 'rgba(230,126,34,0.55)',
+            borderColor: 'transparent',
+            fill: 'origin',
+            pointRadius: 0
+        });
+
+        // 2. Standard normal curve (blue, on top)
+        datasets.push({
+            data: pdf,
+            borderColor: '#3498db',
+            borderWidth: 3,
+            fill: false,
+            pointRadius: 0
+        });
+
+        // Render
+        if (chart) chart.destroy();
+        chart = new Chart(ctx, {
+            type: 'line',
+            data: { labels: xVals.map(v => +v.toFixed(1)), datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    title: { display: true, text: `z = ${z.toFixed(3)} | p-value = ${pValue.toFixed(4)}`, font: { size: 16 } },
+                    legend: { display: false },
+                    tooltip: { mode: 'index', intersect: false }
+                },
+                scales: {
+                    x: { title: { display: true, text: 'z-score' }, ticks: { maxTicksLimit: 9 } },
+                    y: { title: { display: true, text: 'Density' }, beginAtZero: true, max: 0.45 }
+                }
+            }
+        });
+
+        // Stats - Using CSS-positioned caret
+        const sym = alt === 'two-sided' ? '≠' : alt === 'greater' ? '>' : '<';
+        statsOutput.innerHTML = `
+            <strong>H₀:</strong> p = ${p0.toFixed(2)} | <strong>H₁:</strong> p ${sym} ${p0.toFixed(2)} <br>
+            Sample: n = ${n}, x = ${x}, p̂ = ${phat.toFixed(3)}</span> <br>
+            SE = ${se.toFixed(4)} <br>
+            <strong>z = ${z.toFixed(3)}</strong> | <strong>p-value = ${pValue.toFixed(4)}</strong>
+        `;
+    }
+
+    function syncDisplays() {
+        const n = parseInt(nSlider.value);
+        const x = Math.min(parseInt(xSlider.value), n);
+        p0Value.textContent = parseFloat(p0Slider.value).toFixed(2);
+        nValue.textContent = n;
+        xSlider.max = n; xSlider.value = x; xValue.textContent = x;
+        phatValue.textContent = (x / n).toFixed(3);
+        updateChart();
+    }
+
+    p0Slider.addEventListener('input', syncDisplays);
+    nSlider.addEventListener('input', syncDisplays);
+    xSlider.addEventListener('input', syncDisplays);
+    altRadios.forEach(r => r.addEventListener('change', syncDisplays));
+    window.addEventListener('load', () => { xSlider.max = nSlider.value; syncDisplays(); });
+</script>
+</body>
+</html>
